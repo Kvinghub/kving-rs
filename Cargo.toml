@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["kving"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+
+[workspace.dependencies]
+thiserror = "2.0"
+crc32fast = "1.5"
+byteorder = "1.5"
+dashmap = "6.1"
+lru = "0.16"

@@ -1,0 +1,17 @@
+[package]
+name = "kving"
+version.workspace = true
+edition.workspace = true
+authors = ["Gang <freegang555@gmail.com>"]
+repository = "https://github.com/kvinghub/kving-rs"
+readme = "readme.md"
+description = "kving is a key value database."
+license = "Apache-2.0"
+keywords = ["kv", "db", "database"]
+
+[dependencies]
+thiserror.workspace = true
+crc32fast.workspace = true
+byteorder.workspace = true
+dashmap.workspace = true
+lru.workspace = true
