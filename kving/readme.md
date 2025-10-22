@@ -27,6 +27,7 @@ fn main() -> kving::Result<()> {
     kving.put_usize("usize", 0_usize)?;
     kving.put_f32("f32", 0_f32)?;
     kving.put_f64("f64", 0_f64)?;
+    kving.put_bool("bool", true)?;
     kving.put_string("string", "Hello Kving.")?;
     kving.put_blob("blob", &b"Hello Kving!!".to_vec())?;
 
@@ -35,6 +36,7 @@ fn main() -> kving::Result<()> {
     println!("usize={:?}", kving.get_usize("usize"));
     println!("f32={:?}", kving.get_f32("f32"));
     println!("f64={:?}", kving.get_f64("f64"));
+    println!("bool={:?}", kving.get_bool("bool"));
     println!("string={:?}", kving.get_string("string"));
     println!("blob={:?}", kving.get_blob("blob"));
     println!("---------------------------------");

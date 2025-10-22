@@ -93,6 +93,23 @@ impl Kving {
         }
     }
 
+    pub fn get_bool<K>(&self, key: K) -> Option<bool>
+    where
+        K: AsRef<str>,
+    {
+        let key = key.as_ref();
+        let result = self.get(key.as_bytes()).ok()?;
+        if let Some(value) = result {
+            if value.len() == 1 {
+                Some(if value[0] == 1 { true } else { false })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
     pub fn get_string<K>(&self, key: K) -> Option<String>
     where
         K: AsRef<str>,
@@ -151,6 +168,15 @@ impl Kving {
         let key = key.as_ref();
         let value = value.to_be_bytes();
         self.put(key.as_bytes(), &value.as_slice())
+    }
+
+    pub fn put_bool<K>(&self, key: K, value: bool) -> crate::Result<()>
+    where
+        K: AsRef<str>,
+    {
+        let key = key.as_ref();
+        let value = if value { [1] } else { [0] };
+        self.put(key.as_bytes(), &value)
     }
 
     pub fn put_string<K, V>(&self, key: K, value: V) -> crate::Result<()>
