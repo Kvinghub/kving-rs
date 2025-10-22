@@ -1,6 +1,6 @@
 use crate::kving::config::Config;
 use crate::kving::kv_store::KvStore;
-use byteorder::{ReadBytesExt, WriteBytesExt, BE};
+use byteorder::{BE, ReadBytesExt, WriteBytesExt};
 use crc32fast::Hasher;
 use dashmap::DashMap;
 use lru::LruCache;
@@ -103,7 +103,7 @@ pub struct Bitcask {
     active_file_id: AtomicU64,
     next_file_id: AtomicU64,
     file_ids: RwLock<Vec<u64>>,
-    opened_data_file_handles: FileHandleCache,
+    file_handle_caches: FileHandleCache,
 }
 
 impl Bitcask {
@@ -114,24 +114,24 @@ impl Bitcask {
         let file_ids = Self::get_file_ids(&config)?;
         let (active_file_id, keydir) = Self::load_existing_files(&config, &file_ids)?;
         let active_file = Self::open_append_data_file(&config, active_file_id)?;
-        let cap = NonZeroUsize::new(config.max_file_cache_handles() as usize).unwrap();
-        let lri_cache = FileHandleCache::new(LruCache::new(cap));
+        let cap = NonZeroUsize::new(config.max_file_handle_caches() as usize).unwrap();
+        let lru_cache = FileHandleCache::new(LruCache::new(cap));
 
         Ok(Bitcask {
             config,
             keydir,
             active_file: RwLock::new(active_file),
             active_file_id: AtomicU64::new(active_file_id),
-            next_file_id: AtomicU64::new(Self::get_timestamp()),
+            next_file_id: AtomicU64::new(active_file_id + 1),
             file_ids: RwLock::new(file_ids),
-            opened_data_file_handles: lri_cache,
+            file_handle_caches: lru_cache,
         })
     }
 
     /// Load existing files into memory
     fn load_existing_files(config: &Config, file_ids: &Vec<u64>) -> crate::Result<(u64, KeyDir)> {
         if file_ids.is_empty() {
-            return Ok((Self::get_timestamp(), DashMap::new()));
+            return Ok((0, DashMap::new()));
         }
 
         let keydir = DashMap::new();
@@ -140,7 +140,7 @@ impl Bitcask {
         }
 
         // Every time it is opened, a new active file is generated
-        let next_file_id = file_ids.last().map_or(Self::get_timestamp(), |id| *id);
+        let next_file_id = file_ids.last().map_or(0, |id| *id + 1);
         Ok((next_file_id, keydir))
     }
 
@@ -217,15 +217,21 @@ impl Bitcask {
     /// Compact existing files into a new file
     fn merge_existing_files(&self) -> crate::Result<()> {
         // Get old file IDs (excluding active file)
+        let active_file_id = self.active_file_id.load(Ordering::Relaxed);
         let old_file_ids: Vec<u64> = Self::get_file_ids(&self.config)?
             .into_iter()
-            .filter(|&id| id != self.active_file_id.load(Ordering::Relaxed))
+            .filter(|&id| id != active_file_id)
             .collect();
+
+        // Skip if empty
+        if old_file_ids.is_empty() {
+            return Ok(());
+        }
 
         // Merge files
         let merge_file_id = self.next_file_id.load(Ordering::Relaxed);
-        self.next_file_id
-            .store(Self::get_timestamp(), Ordering::Relaxed);
+        let next_file_id = merge_file_id + 1;
+        self.next_file_id.store(next_file_id, Ordering::Relaxed);
 
         let mut merge_file = Self::open_merge_data_file(&self.config, merge_file_id)?;
         let mut new_file_offset = 0;
@@ -346,7 +352,6 @@ impl Bitcask {
             memory_record_pos.file_id == file_id
                 && memory_record_pos.value_pos
                     == record_start_pos + RecordData::HEADER_SIZE + record.key_size
-                && memory_record_pos.timestamp >= record.timestamp
         } else {
             false
         }
@@ -383,14 +388,6 @@ impl Bitcask {
         })
     }
 
-    /// Get current timestamp
-    fn get_timestamp() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs()
-    }
-
     /// Get all data file IDs in the data directory
     fn get_file_ids(config: &Config) -> crate::Result<Vec<u64>> {
         let mut file_ids = Vec::new();
@@ -400,6 +397,12 @@ impl Bitcask {
             let path = entry?.path();
 
             if path.is_dir() {
+                continue;
+            }
+
+            // Clear `.merge` file, they may be invalid files remaining from the previous failed merge, so you can safely delete them.
+            if path.extension().map_or(false, |ext| ext == "merge") {
+                std::fs::remove_file(path)?;
                 continue;
             }
 
@@ -446,9 +449,8 @@ impl Bitcask {
         let file_path = config
             .database_path()
             .join(Self::get_file_name(config, file_id));
-        Ok(BufReader::new(
-            OpenOptions::new().read(true).open(file_path)?,
-        ))
+        let file = OpenOptions::new().read(true).open(file_path)?;
+        Ok(BufReader::new(file))
     }
 
     /// Open merge file
@@ -497,7 +499,7 @@ impl Bitcask {
 
         let file_id = record_pos.file_id;
         let mut cache = self
-            .opened_data_file_handles
+            .file_handle_caches
             .lock()
             .map_err(|_| crate::Error::PoisonError("Failed to lock file cache".to_string()))?;
 
@@ -517,11 +519,8 @@ impl Bitcask {
     /// Internal put method
     fn put_internal(&self, key: &[u8], value: &[u8]) -> crate::Result<()> {
         // Check if file rotation is needed
-        let key_size = key.len() as u64;
-        let value_size = value.len() as u64;
-        let record_size = RecordData::HEADER_SIZE + key_size + value_size;
         let mut active_file = self.active_file.write().unwrap();
-        self.maybe_rotate_file(&mut active_file, record_size)?;
+        self.maybe_rotate_file(&mut active_file)?;
 
         let record = RecordData::new(key.to_vec(), value.to_vec());
         let record_start_pos = active_file.seek(SeekFrom::End(0))?;
@@ -541,13 +540,9 @@ impl Bitcask {
     }
 
     /// Rotate file if current file exceeds size limit
-    fn maybe_rotate_file(
-        &self,
-        active_file: &mut BufWriter<File>,
-        record_size: u64,
-    ) -> crate::Result<()> {
-        let current_offset = active_file.seek(SeekFrom::End(0))?;
-        if current_offset + record_size > self.config.max_file_size() {
+    fn maybe_rotate_file(&self, active_file: &mut BufWriter<File>) -> crate::Result<()> {
+        let meta = active_file.get_ref().metadata()?;
+        if meta.len() >= self.config.max_file_size() {
             active_file.flush()?;
             active_file.get_ref().sync_all()?;
 
@@ -556,8 +551,7 @@ impl Bitcask {
             self.active_file_id.store(next_file_id, Ordering::Relaxed);
             *active_file = Self::open_append_data_file(&self.config, next_file_id)?;
 
-            self.next_file_id
-                .store(Self::get_timestamp(), Ordering::Relaxed);
+            self.next_file_id.store(next_file_id + 1, Ordering::Relaxed);
 
             let mut file_ids = self
                 .file_ids
@@ -577,6 +571,7 @@ impl Bitcask {
             let mut active_file = self.active_file.write().unwrap();
             let _record_start_pos = active_file.seek(SeekFrom::End(0))?;
             active_file.write_all(&tombstone.encode()?)?;
+            active_file.flush()?;
 
             // Remove from memory index
             self.keydir.remove(key);
@@ -631,11 +626,10 @@ impl Bitcask {
 
     /// Internal close method
     fn close_internal(&self) -> crate::Result<()> {
-        self.merge_existing_files()?;
         let mut active_file = self.active_file.write().unwrap();
         active_file.flush()?;
         active_file.get_ref().sync_all()?;
-        self.opened_data_file_handles
+        self.file_handle_caches
             .lock()
             .map_err(|_| crate::Error::PoisonError("Failed to clear data file".to_string()))?
             .clear();

@@ -20,15 +20,30 @@ unsafe impl Send for Kving {}
 unsafe impl Sync for Kving {}
 
 impl Kving {
+    /// Creates a new Kving instance with the specified configuration.
+    /// Initializes the underlying storage and starts a background merge process.
+    ///
+    /// # Arguments
+    /// * `config` - Configuration settings for the KV store
+    ///
+    /// # Returns
+    /// * `Result<Self>` - New Kving instance or error if initialization fails
     pub fn with_config(config: Config) -> crate::Result<Self> {
         let kving = Self {
             store: Arc::new(Box::new(Bitcask::with_config(config)?)),
             is_merging: Arc::new(AtomicBool::new(false)),
         };
-        // kving.merge_transactions()?;
+        kving.merge_transactions(true)?;
         Ok(kving)
     }
 
+    /// Retrieves a signed integer value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to look up (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Option<isize>` - The signed integer value if found and valid, None otherwise
     pub fn get_isize<K>(&self, key: K) -> Option<isize>
     where
         K: AsRef<str>,
@@ -45,6 +60,13 @@ impl Kving {
         }
     }
 
+    /// Retrieves an unsigned integer value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to look up (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Option<usize>` - The unsigned integer value if found and valid, None otherwise
     pub fn get_usize<K>(&self, key: K) -> Option<usize>
     where
         K: AsRef<str>,
@@ -61,6 +83,13 @@ impl Kving {
         }
     }
 
+    /// Retrieves a 32-bit floating point value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to look up (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Option<f32>` - The 32-bit float value if found and valid, None otherwise
     pub fn get_f32<K>(&self, key: K) -> Option<f32>
     where
         K: AsRef<str>,
@@ -77,6 +106,13 @@ impl Kving {
         }
     }
 
+    /// Retrieves a 64-bit floating point value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to look up (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Option<f64>` - The 64-bit float value if found and valid, None otherwise
     pub fn get_f64<K>(&self, key: K) -> Option<f64>
     where
         K: AsRef<str>,
@@ -93,6 +129,13 @@ impl Kving {
         }
     }
 
+    /// Retrieves a boolean value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to look up (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Option<bool>` - The boolean value if found and valid, None otherwise
     pub fn get_bool<K>(&self, key: K) -> Option<bool>
     where
         K: AsRef<str>,
@@ -110,6 +153,13 @@ impl Kving {
         }
     }
 
+    /// Retrieves a string value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to look up (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Option<String>` - The string value if found and valid UTF-8, None otherwise
     pub fn get_string<K>(&self, key: K) -> Option<String>
     where
         K: AsRef<str>,
@@ -126,6 +176,13 @@ impl Kving {
         }
     }
 
+    /// Retrieves a binary blob value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to look up (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Option<Vec<u8>>` - The binary data if found, None otherwise
     pub fn get_blob<K>(&self, key: K) -> Option<Vec<u8>>
     where
         K: AsRef<str>,
@@ -134,6 +191,14 @@ impl Kving {
         self.get(key.as_bytes()).ok()?
     }
 
+    /// Stores a signed integer value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to store under (can be any type that implements AsRef<str>)
+    /// * `value` - Signed integer value to store
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
     pub fn put_isize<K>(&self, key: K, value: isize) -> crate::Result<()>
     where
         K: AsRef<str>,
@@ -143,6 +208,14 @@ impl Kving {
         self.put(key.as_bytes(), &value.as_slice())
     }
 
+    /// Stores an unsigned integer value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to store under (can be any type that implements AsRef<str>)
+    /// * `value` - Unsigned integer value to store
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
     pub fn put_usize<K>(&self, key: K, value: usize) -> crate::Result<()>
     where
         K: AsRef<str>,
@@ -152,6 +225,14 @@ impl Kving {
         self.put(key.as_bytes(), &value.as_slice())
     }
 
+    /// Stores a 32-bit floating point value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to store under (can be any type that implements AsRef<str>)
+    /// * `value` - 32-bit float value to store
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
     pub fn put_f32<K>(&self, key: K, value: f32) -> crate::Result<()>
     where
         K: AsRef<str>,
@@ -161,6 +242,14 @@ impl Kving {
         self.put(key.as_bytes(), &value.as_slice())
     }
 
+    /// Stores a 64-bit floating point value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to store under (can be any type that implements AsRef<str>)
+    /// * `value` - 64-bit float value to store
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
     pub fn put_f64<K>(&self, key: K, value: f64) -> crate::Result<()>
     where
         K: AsRef<str>,
@@ -170,6 +259,14 @@ impl Kving {
         self.put(key.as_bytes(), &value.as_slice())
     }
 
+    /// Stores a boolean value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to store under (can be any type that implements AsRef<str>)
+    /// * `value` - Boolean value to store
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
     pub fn put_bool<K>(&self, key: K, value: bool) -> crate::Result<()>
     where
         K: AsRef<str>,
@@ -179,6 +276,14 @@ impl Kving {
         self.put(key.as_bytes(), &value)
     }
 
+    /// Stores a string value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to store under (can be any type that implements AsRef<str>)
+    /// * `value` - String value to store (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
     pub fn put_string<K, V>(&self, key: K, value: V) -> crate::Result<()>
     where
         K: AsRef<str>,
@@ -189,6 +294,14 @@ impl Kving {
         self.put(key.as_bytes(), value.as_bytes())
     }
 
+    /// Stores a binary blob value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to store under (can be any type that implements AsRef<str>)
+    /// * `value` - Binary data to store
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
     pub fn put_blob<K>(&self, key: K, value: &[u8]) -> crate::Result<()>
     where
         K: AsRef<str>,
@@ -197,6 +310,13 @@ impl Kving {
         self.put(key.as_bytes(), value)
     }
 
+    /// Deletes the value associated with the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to delete (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
     pub fn delete<K>(&self, key: K) -> crate::Result<()>
     where
         K: AsRef<str>,
@@ -204,6 +324,13 @@ impl Kving {
         (self as &dyn KvStore).delete(key.as_ref().as_bytes())
     }
 
+    /// Checks if the store contains a value for the given key.
+    ///
+    /// # Arguments
+    /// * `key` - Key to check (can be any type that implements AsRef<str>)
+    ///
+    /// # Returns
+    /// * `Result<bool>` - True if key exists, false otherwise, or error
     pub fn contains<K>(&self, key: K) -> crate::Result<bool>
     where
         K: AsRef<str>,
@@ -211,10 +338,10 @@ impl Kving {
         (self as &dyn KvStore).contains(key.as_ref().as_bytes())
     }
 
-    pub fn sync<K>(&self) -> crate::Result<()> {
-        (self as &dyn KvStore).sync()
-    }
-
+    /// Returns a list of all keys in the store as strings.
+    ///
+    /// # Returns
+    /// * `Result<Vec<String>>` - List of keys or error
     pub fn list_keys(&self) -> crate::Result<Vec<String>> {
         let keys = (self as &dyn KvStore)
             .list_keys()?
@@ -224,12 +351,28 @@ impl Kving {
         Ok(keys)
     }
 
+    /// Synchronizes all pending writes to persistent storage.
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
+    pub fn sync(&self) -> crate::Result<()> {
+        (self as &dyn KvStore).sync()
+    }
+
+    /// Closes the store and releases any resources.
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
     pub fn close(&self) -> crate::Result<()> {
         (self as &dyn KvStore).close()
     }
 
-    fn merge_transactions(&self) -> crate::Result<()> {
-        if !self.can_merge()? {
+    /// Initiates a background merge process if not already running.
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
+    fn merge_transactions(&self, force: bool) -> crate::Result<()> {
+        if !self.can_merge()? && !force {
             return Ok(());
         }
 
@@ -261,13 +404,13 @@ impl KvStore for Kving {
     }
 
     fn put(&self, key: &[u8], value: &[u8]) -> crate::Result<()> {
-        self.store.put(key, value)?;
-        self.merge_transactions()
+        self.store.put(key, value)
+        // self.merge_transactions(false)
     }
 
     fn delete(&self, key: &[u8]) -> crate::Result<()> {
         self.store.delete(key)
-        // self.merge_transactions()
+        // self.merge_transactions(false)
     }
 
     fn contains(&self, key: &[u8]) -> crate::Result<bool> {

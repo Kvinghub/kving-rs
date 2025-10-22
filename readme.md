@@ -15,6 +15,10 @@ kving = "0.0.1"
 
 ```rust
 // main.rs
+use std::path::PathBuf;
+
+use kving::{Config, Kving};
+
 fn main() -> kving::Result<()> {
     let kving = Kving::with_config(
         Config::builder()
@@ -49,3 +53,5 @@ fn main() -> kving::Result<()> {
     Ok(())
 }
 ```
+
+> Note: The current situation is not very stable, please be cautious when using it in production environments.
