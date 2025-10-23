@@ -230,8 +230,8 @@ impl Bitcask {
 
         // Merge files
         let merge_file_id = self.next_file_id.load(Ordering::Relaxed);
-        let next_file_id = merge_file_id + 1;
-        self.next_file_id.store(next_file_id, Ordering::Relaxed);
+        self.next_file_id
+            .store(merge_file_id + 1, Ordering::Relaxed);
 
         let mut merge_file = Self::open_merge_data_file(&self.config, merge_file_id)?;
         let mut new_file_offset = 0;
@@ -328,6 +328,8 @@ impl Bitcask {
 
                         merge_keydir.insert(record.key, new_record_pos);
                         *new_file_offset += bytes_written;
+                    } else {
+                        merge_keydir.remove(&record.key);
                     }
 
                     old_file_offset = record_start_pos + total_size;
@@ -486,7 +488,9 @@ impl Bitcask {
         let file_path = config
             .database_path()
             .join(Self::get_file_name(config, file_id));
-        std::fs::remove_file(file_path)?;
+        if let Err(e) = std::fs::remove_file(&file_path) {
+            eprintln!("Failed to delete file {}: {}", file_path.display(), e);
+        }
         Ok(())
     }
 
