@@ -2,8 +2,8 @@ use crate::kving::config::Config;
 use crate::kving::kv_store::KvStore;
 use byteorder::{BE, ReadBytesExt, WriteBytesExt};
 use crc32fast::Hasher;
-use dashmap::DashMap;
 use lru::LruCache;
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::num::NonZeroUsize;
@@ -14,7 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type FileHandleCache = Mutex<LruCache<u64, BufReader<File>>>;
 
 /// KeyDir is a hash table in memory that maps keys to their positions in a data file
-type KeyDir = DashMap<Vec<u8>, RecordPos>;
+// type KeyDir = DashMap<Vec<u8>, RecordPos>;
+type RwKeyDir = RwLock<HashMap<Vec<u8>, RecordPos>>;
 
 /// The specific location of the RecordPos value in the data file
 #[allow(unused)]
@@ -98,7 +99,7 @@ impl RecordData {
 
 pub struct Bitcask {
     config: Config,
-    keydir: KeyDir,
+    keydir: RwKeyDir,
     active_file: RwLock<BufWriter<File>>,
     active_file_id: AtomicU64,
     next_file_id: AtomicU64,
@@ -114,7 +115,8 @@ impl Bitcask {
         let file_ids = Self::get_file_ids(&config)?;
         let (active_file_id, keydir) = Self::load_existing_files(&config, &file_ids)?;
         let active_file = Self::open_append_data_file(&config, active_file_id)?;
-        let cap = NonZeroUsize::new(config.max_file_handle_caches() as usize).unwrap();
+        let cap = NonZeroUsize::new(config.max_file_handle_caches() as usize)
+            .expect("Failed to new lru cap");
         let lru_cache = FileHandleCache::new(LruCache::new(cap));
 
         Ok(Bitcask {
@@ -129,12 +131,12 @@ impl Bitcask {
     }
 
     /// Load existing files into memory
-    fn load_existing_files(config: &Config, file_ids: &Vec<u64>) -> crate::Result<(u64, KeyDir)> {
+    fn load_existing_files(config: &Config, file_ids: &Vec<u64>) -> crate::Result<(u64, RwKeyDir)> {
         if file_ids.is_empty() {
-            return Ok((0, DashMap::new()));
+            return Ok((0, RwLock::new(HashMap::new())));
         }
 
-        let keydir = DashMap::new();
+        let keydir = RwLock::new(HashMap::new());
         for file_id in file_ids {
             Self::process_data_file(config, *file_id, &keydir)?;
         }
@@ -145,10 +147,11 @@ impl Bitcask {
     }
 
     /// Process a single data file and populate keydir
-    fn process_data_file(config: &Config, file_id: u64, keydir: &KeyDir) -> crate::Result<()> {
+    fn process_data_file(config: &Config, file_id: u64, keydir: &RwKeyDir) -> crate::Result<()> {
         let mut file = Self::open_read_only_data_file(config, file_id)?;
         let mut offset = 0;
 
+        let mut keydir = keydir.write().expect("Failed to write keydir");
         while let Some(record_result) =
             Self::read_next_record(&mut file, offset, config.strict_crc_validation())?
         {
@@ -250,8 +253,9 @@ impl Bitcask {
         Self::finish_merge_data_file(&self.config, merge_file_id)?;
 
         // Update keydir and delete old files
+        let mut keydir = self.keydir.write().expect("Failed to write keydir");
         for (key, pos) in merge_keydir {
-            self.keydir.insert(key, pos);
+            keydir.insert(key, pos);
         }
         self.delete_data_files(&old_file_ids)?;
 
@@ -269,12 +273,12 @@ impl Bitcask {
     fn merge_data_files(
         config: &Config,
         old_file_ids: &[u64],
-        keydir: &KeyDir,
+        keydir: &RwKeyDir,
         merge_file_id: u64,
         merge_file: &mut BufWriter<File>,
         new_file_offset: &mut u64,
-    ) -> crate::Result<KeyDir> {
-        let merge_keydir = KeyDir::new();
+    ) -> crate::Result<HashMap<Vec<u8>, RecordPos>> {
+        let mut merge_keydir = HashMap::new();
 
         for &old_file_id in old_file_ids {
             Self::merge_single_file(
@@ -284,7 +288,7 @@ impl Bitcask {
                 merge_file_id,
                 merge_file,
                 new_file_offset,
-                &merge_keydir,
+                &mut merge_keydir,
             )?;
         }
 
@@ -295,22 +299,31 @@ impl Bitcask {
     fn merge_single_file(
         config: &Config,
         old_file_id: u64,
-        keydir: &KeyDir,
+        keydir: &RwKeyDir,
         merge_file_id: u64,
         merge_file: &mut BufWriter<File>,
         new_file_offset: &mut u64,
-        merge_keydir: &KeyDir,
+        merge_keydir: &mut HashMap<Vec<u8>, RecordPos>,
     ) -> crate::Result<()> {
         let mut file = Self::open_read_only_data_file(config, old_file_id)?;
         let mut old_file_offset = 0;
 
+        let keydir = keydir.read().expect("Failed to read keydir");
         while let Some(record_result) =
             Self::read_next_record(&mut file, old_file_offset, config.strict_crc_validation())?
         {
             match record_result {
                 Ok((record, record_start_pos)) => {
                     let total_size = record.total_size();
-                    if Self::should_merge_record(&record, old_file_id, record_start_pos, keydir) {
+                    let should_merge_record = match keydir.get(&record.key) {
+                        None => false,
+                        Some(memory_record_pos) => {
+                            memory_record_pos.file_id == old_file_id
+                                && memory_record_pos.value_pos
+                                    == record_start_pos + RecordData::HEADER_SIZE + record.key_size
+                        }
+                    };
+                    if should_merge_record {
                         file.seek(SeekFrom::Start(record_start_pos))?;
 
                         let mut record_bytes = vec![0; total_size as usize];
@@ -341,22 +354,6 @@ impl Bitcask {
         }
         merge_file.flush()?;
         Ok(())
-    }
-
-    /// Check if a record should be merged (is still valid and current)
-    fn should_merge_record(
-        record: &RecordData,
-        file_id: u64,
-        record_start_pos: u64,
-        keydir: &KeyDir,
-    ) -> bool {
-        if let Some(memory_record_pos) = keydir.get(&record.key) {
-            memory_record_pos.file_id == file_id
-                && memory_record_pos.value_pos
-                    == record_start_pos + RecordData::HEADER_SIZE + record.key_size
-        } else {
-            false
-        }
     }
 
     /// Read record data from file (after CRC)
@@ -496,7 +493,8 @@ impl Bitcask {
 
     /// Internal get method
     fn get_internal(&self, key: &[u8]) -> crate::Result<Option<Vec<u8>>> {
-        let record_pos = match self.keydir.get(key) {
+        let keydir = self.keydir.read().expect("Failed to read keydir");
+        let record_pos = match keydir.get(key) {
             Some(pos) => pos,
             None => return Ok(None),
         };
@@ -523,7 +521,10 @@ impl Bitcask {
     /// Internal put method
     fn put_internal(&self, key: &[u8], value: &[u8]) -> crate::Result<()> {
         // Check if file rotation is needed
-        let mut active_file = self.active_file.write().unwrap();
+        let mut active_file = self
+            .active_file
+            .write()
+            .expect("Failed to write active file");
         self.maybe_rotate_file(&mut active_file)?;
 
         let record = RecordData::new(key.to_vec(), value.to_vec());
@@ -539,7 +540,8 @@ impl Bitcask {
             timestamp: record.timestamp,
         };
 
-        self.keydir.insert(key.to_vec(), record_pos);
+        let mut keydir = self.keydir.write().expect("Failed to write keydir");
+        keydir.insert(key.to_vec(), record_pos);
         Ok(())
     }
 
@@ -569,16 +571,20 @@ impl Bitcask {
 
     /// Internal remove method
     fn delete_internal(&self, key: &[u8]) -> crate::Result<()> {
-        if self.keydir.contains_key(key) {
+        let mut keydir = self.keydir.write().expect("Failed to write keydir");
+        if keydir.contains_key(key) {
             // Write tombstone record
             let tombstone = RecordData::tombstone(key.to_vec());
-            let mut active_file = self.active_file.write().unwrap();
+            let mut active_file = self
+                .active_file
+                .write()
+                .expect("Failed to write active file");
             let _record_start_pos = active_file.seek(SeekFrom::End(0))?;
             active_file.write_all(&tombstone.encode()?)?;
             active_file.flush()?;
 
             // Remove from memory index
-            self.keydir.remove(key);
+            keydir.remove(key);
         }
 
         Ok(())
@@ -586,17 +592,22 @@ impl Bitcask {
 
     /// Internal list_keys method
     fn list_keys_internal(&self) -> crate::Result<Vec<Vec<u8>>> {
-        Ok(self.keydir.iter().map(|e| e.key().clone()).collect())
+        let keydir = self.keydir.read().expect("Failed to read keydir");
+        Ok(keydir.iter().map(|e| e.0.clone()).collect())
     }
 
     /// Internal contains method
     fn contains_internal(&self, key: &[u8]) -> crate::Result<bool> {
-        Ok(self.keydir.contains_key(key))
+        let keydir = self.keydir.read().expect("Failed to read keydir");
+        Ok(keydir.contains_key(key))
     }
 
     /// Internal sync method
     fn sync_internal(&self) -> crate::Result<()> {
-        let mut active_file = self.active_file.write().unwrap();
+        let mut active_file = self
+            .active_file
+            .write()
+            .expect("Failed to write active file");
         active_file.flush()?;
         active_file.get_ref().sync_all()?;
         Ok(())
@@ -630,7 +641,10 @@ impl Bitcask {
 
     /// Internal close method
     fn close_internal(&self) -> crate::Result<()> {
-        let mut active_file = self.active_file.write().unwrap();
+        let mut active_file = self
+            .active_file
+            .write()
+            .expect("Failed to write active file");
         active_file.flush()?;
         active_file.get_ref().sync_all()?;
         self.file_handle_caches
