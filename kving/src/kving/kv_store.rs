@@ -9,6 +9,8 @@ pub trait KvStore: Send + Sync {
 
     fn list_keys(&self) -> crate::Result<Vec<Vec<u8>>>;
 
+    fn clear(&self) -> crate::Result<()>;
+
     fn sync(&self) -> crate::Result<()>;
 
     fn can_merge(&self) -> crate::Result<bool>;

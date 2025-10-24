@@ -590,6 +590,16 @@ impl Bitcask {
         Ok(())
     }
 
+    /// Internal clear method
+    fn clear_internal(&self) -> crate::Result<()> {
+        self.close_internal()?;
+        let file_ids = Self::get_file_ids(&self.config)?;
+        for file_id in file_ids {
+            Self::delete_data_file(&self.config, file_id)?;
+        }
+        Ok(())
+    }
+
     /// Internal list_keys method
     fn list_keys_internal(&self) -> crate::Result<Vec<Vec<u8>>> {
         let keydir = self.keydir.read().expect("Failed to read keydir");
@@ -674,6 +684,10 @@ impl KvStore for Bitcask {
 
     fn list_keys(&self) -> crate::Result<Vec<Vec<u8>>> {
         self.list_keys_internal()
+    }
+
+    fn clear(&self) -> crate::Result<()> {
+        self.clear_internal()
     }
 
     fn sync(&self) -> crate::Result<()> {

@@ -351,6 +351,14 @@ impl Kving {
         Ok(keys)
     }
 
+    /// Clear all data.
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error indicator
+    pub fn clear(&self) -> crate::Result<()> {
+        (self as &dyn KvStore).clear()
+    }
+
     /// Synchronizes all pending writes to persistent storage.
     ///
     /// # Returns
@@ -419,6 +427,10 @@ impl KvStore for Kving {
 
     fn list_keys(&self) -> crate::Result<Vec<Vec<u8>>> {
         self.store.list_keys()
+    }
+
+    fn clear(&self) -> crate::Result<()> {
+        self.store.clear()
     }
 
     fn sync(&self) -> crate::Result<()> {
